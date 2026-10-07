@@ -2,7 +2,7 @@ name: Retry OCI A1 Flex Instance
 
 on:
   schedule:
-    - cron: '*/15 * * * *'   # cada 15 minutos, horario UTC
+    - cron: '7,22,37,52 * * * *'   # cada 15 minutos, horario UTC
   workflow_dispatch:          # permite correrlo manualmente desde la pestaña Actions
 
 jobs:
