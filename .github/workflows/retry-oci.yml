@@ -1,0 +1,83 @@
+name: Retry OCI A1 Flex Instance
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # cada 15 minutos, horario UTC
+  workflow_dispatch:          # permite correrlo manualmente desde la pestaña Actions
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Instalar OCI CLI
+        run: pip install oci-cli
+
+      - name: Configurar credenciales OCI
+        run: |
+          mkdir -p ~/.oci
+          printf '%s' "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/key.pem
+          chmod 600 ~/.oci/key.pem
+          cat > ~/.oci/config << EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=${{ secrets.OCI_FINGERPRINT }}
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ secrets.OCI_REGION }}
+          key_file=~/.oci/key.pem
+          EOF
+
+      - name: Verificar si la instancia ya existe
+        id: check
+        run: |
+          EXISTING=$(oci compute instance list \
+            --compartment-id "${{ secrets.OCI_TENANCY_OCID }}" \
+            --display-name agente-telegram \
+            --lifecycle-state RUNNING \
+            --query "data[0].id" --raw-output 2>/dev/null || echo "")
+          echo "instance_id=$EXISTING" >> "$GITHUB_OUTPUT"
+
+      - name: Buscar el OCID de la imagen Ubuntu 24.04 (automático, no hace falta que lo busques vos)
+        if: steps.check.outputs.instance_id == ''
+        id: image
+        run: |
+          IMAGE_ID=$(oci compute image list \
+            --compartment-id "${{ secrets.OCI_TENANCY_OCID }}" \
+            --operating-system "Canonical Ubuntu" \
+            --operating-system-version "24.04" \
+            --shape "VM.Standard.A1.Flex" \
+            --sort-by TIMECREATED --sort-order DESC \
+            --query "data[0].id" --raw-output)
+          echo "image_id=$IMAGE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Intentar crear la instancia
+        if: steps.check.outputs.instance_id == ''
+        id: launch
+        continue-on-error: true
+        run: |
+          echo "${{ secrets.SSH_PUBLIC_KEY }}" > /tmp/key.pub
+          INSTANCE_ID=$(oci compute instance launch \
+            --compartment-id "${{ secrets.OCI_TENANCY_OCID }}" \
+            --availability-domain "${{ secrets.OCI_AD }}" \
+            --shape "VM.Standard.A1.Flex" \
+            --shape-config '{"ocpus": 2, "memoryInGBs": 12}' \
+            --image-id "${{ steps.image.outputs.image_id }}" \
+            --subnet-id "${{ secrets.OCI_SUBNET_ID }}" \
+            --display-name agente-telegram \
+            --assign-public-ip true \
+            --ssh-authorized-keys-file /tmp/key.pub \
+            --wait-for-state RUNNING \
+            --query "data.id" --raw-output)
+          echo "instance_id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Avisar por Telegram con la IP
+        if: steps.launch.outputs.instance_id != ''
+        run: |
+          VNIC_ID=$(oci compute instance list-vnics \
+            --instance-id "${{ steps.launch.outputs.instance_id }}" \
+            --query "data[0].id" --raw-output)
+          PUBLIC_IP=$(oci network vnic get \
+            --vnic-id "$VNIC_ID" \
+            --query "data.\"public-ip\"" --raw-output)
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="✅ ¡Instancia Oracle creada! IP pública: $PUBLIC_IP"
