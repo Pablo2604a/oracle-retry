@@ -7,7 +7,7 @@ on:
 
 jobs:
   retry:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Instalar OCI CLI
         run: pip install oci-cli
@@ -38,17 +38,28 @@ jobs:
             --compartment-id "$TENANCY_OCID" \
             --query 'data[].name' \
             --output table
-
+            
       - name: Verificar si la instancia ya existe
         id: check
         run: |
           EXISTING=$(oci compute instance list \
             --compartment-id "${{ secrets.OCI_TENANCY_OCID }}" \
             --display-name agente-telegram \
-            --lifecycle-state RUNNING \
-            --query "data[0].id" --raw-output 2>/dev/null || echo "")
+            --query "data[?\"lifecycle-state\"!='TERMINATED'] | [0].id" \
+            --raw-output)
+
+          if [ "$EXISTING" = "None" ] || [ "$EXISTING" = "null" ]; then
+            EXISTING=""
+          fi
+
           echo "instance_id=$EXISTING" >> "$GITHUB_OUTPUT"
 
+          if [ -n "$EXISTING" ]; then
+            echo "Ya existe una instancia no terminada. Se omite la creación."
+          else
+            echo "No existe una instancia activa. Se intentará crear."
+          fi
+      
       - name: Buscar el OCID de la imagen Ubuntu 24.04 (automático, no hace falta que lo busques vos)
         if: steps.check.outputs.instance_id == ''
         id: image
@@ -65,7 +76,6 @@ jobs:
       - name: Intentar crear la instancia
         if: steps.check.outputs.instance_id == ''
         id: launch
-        continue-on-error: true
         run: |
           echo "${{ secrets.SSH_PUBLIC_KEY }}" > /tmp/key.pub
           INSTANCE_ID=$(oci compute instance launch \
