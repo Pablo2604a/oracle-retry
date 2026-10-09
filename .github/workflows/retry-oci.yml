@@ -26,6 +26,19 @@ jobs:
           key_file=~/.oci/key.pem
           EOF
 
+      - name: Diagnosticar región y dominios
+        env:
+          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          REGION_NAME: ${{ secrets.OCI_REGION }}
+        run: |
+          chmod 600 ~/.oci/config
+          echo "Región configurada: $REGION_NAME"
+          echo "Dominios de disponibilidad:"
+          oci iam availability-domain list \
+            --compartment-id "$TENANCY_OCID" \
+            --query 'data[].name' \
+            --output table
+
       - name: Verificar si la instancia ya existe
         id: check
         run: |
