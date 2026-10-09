@@ -72,25 +72,58 @@ jobs:
             --sort-by TIMECREATED --sort-order DESC \
             --query "data[0].id" --raw-output)
           echo "image_id=$IMAGE_ID" >> "$GITHUB_OUTPUT"
-
-      - name: Intentar crear la instancia
+     
+      - name: Intentar crear la instancia (hasta 3 intentos)
         if: steps.check.outputs.instance_id == ''
         id: launch
+        env:
+          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_AD: ${{ secrets.OCI_AD }}
+          SUBNET_ID: ${{ secrets.OCI_SUBNET_ID }}
+          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+          IMAGE_ID: ${{ steps.image.outputs.image_id }}
         run: |
-          echo "${{ secrets.SSH_PUBLIC_KEY }}" > /tmp/key.pub
-          INSTANCE_ID=$(oci compute instance launch \
-            --compartment-id "${{ secrets.OCI_TENANCY_OCID }}" \
-            --availability-domain "${{ secrets.OCI_AD }}" \
-            --shape "VM.Standard.A1.Flex" \
-            --shape-config '{"ocpus": 2, "memoryInGBs": 12}' \
-            --image-id "${{ steps.image.outputs.image_id }}" \
-            --subnet-id "${{ secrets.OCI_SUBNET_ID }}" \
-            --display-name agente-telegram \
-            --assign-public-ip true \
-            --ssh-authorized-keys-file /tmp/key.pub \
-            --wait-for-state RUNNING \
-            --query "data.id" --raw-output)
-          echo "instance_id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$SSH_PUBLIC_KEY" > /tmp/key.pub
+          chmod 600 /tmp/key.pub
+          ERROR_FILE=$(mktemp)
+
+          for attempt in 1 2 3; do
+            echo "Intento $attempt de 3 para crear la VM..."
+
+            if INSTANCE_ID=$(oci compute instance launch \
+              --compartment-id "$TENANCY_OCID" \
+              --availability-domain "$OCI_AD" \
+              --shape "VM.Standard.A1.Flex" \
+              --shape-config '{"ocpus": 2, "memoryInGBs": 12}' \
+              --image-id "$IMAGE_ID" \
+              --subnet-id "$SUBNET_ID" \
+              --display-name agente-telegram \
+              --assign-public-ip true \
+              --ssh-authorized-keys-file /tmp/key.pub \
+              --wait-for-state RUNNING \
+              --query "data.id" --raw-output \
+              2>"$ERROR_FILE"); then
+
+              echo "instance_id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
+              echo "VM creada correctamente: $INSTANCE_ID"
+              exit 0
+            fi
+
+            cat "$ERROR_FILE"
+
+            if ! grep -qi "Out of host capacity" "$ERROR_FILE"; then
+              echo "Error diferente a falta de capacidad. No se reintenta."
+              exit 1
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              echo "Sin capacidad. Esperando 120 segundos..."
+              sleep 120
+            fi
+          done
+
+          echo "No se pudo crear la VM tras 3 intentos."
+          exit 1
 
       - name: Avisar por Telegram con la IP
         if: steps.launch.outputs.instance_id != ''
