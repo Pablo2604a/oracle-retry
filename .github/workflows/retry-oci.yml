@@ -94,7 +94,7 @@ jobs:
               --compartment-id "$TENANCY_OCID" \
               --availability-domain "$OCI_AD" \
               --shape "VM.Standard.A1.Flex" \
-              --shape-config '{"ocpus": 2, "memoryInGBs": 12}' \
+              --shape-config '{"ocpus": 1, "memoryInGBs": 6}' \
               --image-id "$IMAGE_ID" \
               --subnet-id "$SUBNET_ID" \
               --display-name agente-telegram \
